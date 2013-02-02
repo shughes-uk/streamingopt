@@ -14,14 +14,17 @@ CRF_MAX = 35
 CRF_MIN = 30
 VBR_MAX = 400
 VBUFF = VBR_MAX * 2
+INPUT_FILE = 'test.mp4'
+RENDER_FRAMES = 100
 MAX_CPU = 85
 PRESETS = ['ultrafast','superfast','veryfast','faster','fast','medium','slow','slower','veryslow','placebo']
 RESOLUTIONS = {'720p':(1280,720),'1080p':(1920,1080),'480p':(854,480)}
-FPS_ = [30,60]
+FPS = [30,60]
 SSIM_RGEX = r'SSIM Mean Y:(\d.\d+)'
 FPS_RGEX = r'(\d+.\d+) fps'
 MLP_COLORS = ['b','g','r','c','m','y','k','w']
 MLP_LINES = ['-','--','-.',':','.',',','o','v','^','<']
+
 
 """	480p
 		30 fps
@@ -84,20 +87,20 @@ class CPUMon(threading.Thread):
 class X264Thread(QThread):
 
 	jobFinishedSignal = pyqtSignal(object)
-
-	def __init__(self,preset,fps,crf,vbv_maxrate,vbv_bufsize,input_file,resolution,frames,parent):
+	def __init__(self,test):
 		QThread.__init__(self)
+		self.test = test
 		self.exiting = False
-		self.preset = preset
-		self.fps = fps
-		self.crf = crf
-		self.vbv_maxrate = vbv_maxrate
-		self.vbv_bufsize = vbv_bufsize
-		self.input_file = input_file
-		self.resolution = resolution
+		self.preset = test.preset
+		self.fps = FPS[0]
+		self.crf = test.crf
+		self.vbv_maxrate = VBR_MAX
+		self.vbv_bufsize = VBUFF
+		self.input_file = INPUT_FILE
+		self.resolution = RESOLUTIONS[test.resolution]
 		#TODO if linux/osx output to dev/null
 		self.output = 'NUL'
-		self.frames = frames
+		self.frames = RENDER_FRAMES
 
 	def cancel(self):
 		if self.p.returncode is None:
@@ -175,9 +178,11 @@ class X264Thread(QThread):
 			print '\t Max CPU : %f' %cpuMonitor.getMax()
 			print '\t Average FPS : %f' %avg_fps
 			print '\t SSIM : %f' %ssim
-			self.jobFinishedSignal.emit({ 'avg_cpu':cpuMonitor.getAvg() ,'max_cpu':cpuMonitor.getMax() , 'avg_fps':avg_fps , 'ssim':ssim })
+
+			self.test.results = TestResult(avg_fps,cpuMonitor.getAvg(),cpuMonitor.cpuPolls,ssim)
+			self.jobFinishedSignal.emit(self.test)
 		except Exception , e:
-			print e
+			print e.message
 
 def Optimize():
 	#preset = PRESETS[0]
@@ -243,11 +248,31 @@ class QtTextLogger(QObject):
 		if self.out:
 			self.out.write('%i:%i:%i : ' %(t.hour,t.minute,t.second) + message + '\n')
 
+class TestResult():
+	def __init__(self,avg_fps,avg_cpu,cpu_polls,ssim):
+		self.avg_fps = avg_fps
+		self.avg_cpu = avg_cpu
+		self.cpu_polls = cpu_polls
+		self.ssim = ssim
+
+
+class Test():
+	def __init__(self,resolution,preset,crf):
+		self.resolution = resolution
+		self.preset = preset
+		self.crf = crf
+		self.results = None
+
+
+	def __repr__(self):
+		return 'X264 Test ' + self.resolution + ' ' + self.preset + ' ' + str(self.crf)
+
 class QResolutionItem(QStandardItem):
 	def __init__(self,resolution):
 		super(QStandardItem,self).__init__()
 		self.resolution = resolution
 		self.setText(resolution)
+		self.setEditable(False)
 		self.result = None
 
 	def update(self):
@@ -273,6 +298,7 @@ class QPresetItem(QStandardItem):
 		self.tested = False
 		self.result = None
 		self.preset = preset
+		self.setEditable(False)
 		self.setText(preset)
 
 	def update(self):
@@ -293,12 +319,15 @@ class QPresetItem(QStandardItem):
 
 
 class QCRFItem(QStandardItem):
-	def __init__(self,CRF):
+	def __init__(self,test):
 		super(QStandardItem,self).__init__()
-		self.tested = True
+		self.test_this = True
+		self.tested = False
 		self.result = 'maybe'
-		self.CRF = CRF
-		self.setText(CRF)
+		self.CRF = test.crf
+		self.setText(str(test.crf))
+		self.setEditable(False)
+		self.results = None
 
 	def update(self):
 		if self.result is 'maybe':
@@ -310,6 +339,28 @@ class QCRFItem(QStandardItem):
 		elif self.result is 'yes':
 			#green
 			self.setBackground(QColor(0,255,0))
+
+class IndividualTestResultFrame(QFrame):
+	def __init__(self,parent):
+		super(QFrame,self).__init__(parent)
+		self.resize(525,275)
+		self.FPSLabel = QLabel(self)
+		self.FPSLabel.move(10,10)
+		self.FPSLabel.resize(150,15)
+		self.MaxCpuLabel = QLabel(self)
+		self.MaxCpuLabel.move(160,10)
+		self.MaxCpuLabel.resize(150,15)
+		self.SSIMLabel = QLabel(self)
+		self.SSIMLabel.move(310,10)
+		self.SSIMLabel.resize(150,15)
+		self.hide()
+
+	def show(self,qcrfitem):
+		self.FPSLabel.setText('Average FPS : %i' %qcrfitem.results['avg_fps'])
+		self.MaxCpuLabel.setText('Max CPU : %i' %qcrfitem.results['max_cpu'])
+		self.SSIMLabel.setText('SSIM : %i' %qcrfitem.results['SSIM'])
+		self.setFrameShape(QFrame.StyledPanel)
+		super(QFrame,self).show()
 
 class MainWindow(QWidget):
 	def __init__(self):
@@ -325,21 +376,54 @@ class MainWindow(QWidget):
 		self.GoButton = QPushButton('Go',self)
 		self.GoButton.resize(self.GoButton.sizeHint())
 		self.GoButton.move(600,600)
-		self.connect(self.GoButton, SIGNAL("clicked()"), self.StartJerb)
+		#self.connect(self.GoButton, SIGNAL("clicked()"), self.StartJerb)
 
 		self.CancelButton = QPushButton('Cancel',self)
 		self.CancelButton.resize(self.CancelButton.sizeHint())
 		self.CancelButton.move(500,500)
 		self.connect(self.CancelButton,SIGNAL("clicked()"), self.StopJerb)
+		self.CancelButton.hide()
 
 		self.TestsTree = QTreeView(self)
 		self.BuildTestsModel()
 		self.TestsTree.setModel(self.model)
 		self.TestsTree.resize(200,500)
 		self.TestsTree.move(25,25)	
+		self.UpdateTestTree()
 
+		self.ResultFrame = IndividualTestResultFrame(self)
+		self.ResultFrame.move(250,250)
+		#self.ResultFrame.show(testCRF)
+
+		self.test_in_progress = False
+		self.test_queue = []
 		self.show()
+		#self.BeginTests(reversed(self.tests))
 		#Optimize()
+
+	def BeginTests(self,tests):
+		if self.test_in_progress:
+			print 'Test already in progress'
+		else:
+			print 'Tests queued up'
+			self.test_queue.extend(tests)
+			self.StartX264Job(self.test_queue.pop())
+			self.test_in_progress = True
+
+	def StartX264Job(self,test):
+		print 'Kicking off x264 job with ' + str(test)
+		self.wThread = X264Thread(test)
+		self.wThread.jobFinishedSignal.connect(self.X264Finish)
+		self.wThread.start()
+
+	def X264Finish(self,test):
+		print 'Test Complete , results : '
+		print test.results.avg_fps
+		self.UpdateTestTree()
+		if len(self.test_queue) > 0:
+			print 'More tests in the queue moving to next one'
+			self.StartX264Job(self.test_queue.pop())
+
 
 	def SetUpLog(self):
 		self.OutTextEdit = QTextBrowser(self)
@@ -361,33 +445,59 @@ class MainWindow(QWidget):
 		else:
 			self.OutTextEdit.append(msgclr[0])
 
-	def StartJerb(self):
-		self.wThread = X264Thread(preset='ultrafast',fps=30,crf=35,vbv_maxrate=1500,vbv_bufsize=3000,input_file='test.mp4',resolution=RESOLUTIONS['480p'],frames=100,parent=self)
-		self.wThread.jobFinishedSignal.connect(self.X264Finish)
-		self.wThread.start()
-
 	def StopJerb(self):
 		self.wThread.cancel()
 
-	def X264Finish(self,result):
-		print result
 
 
 	def BuildTestsModel(self):
-		self.model = QStandardItemModel()
+		self.tests = []
 		for resolution in RESOLUTIONS:
-			resolution_item = QResolutionItem(resolution)
-			resolution_item.setEditable(False)
 			for preset in PRESETS:
-				preset_item = QPresetItem(preset)			
-				preset_item.setEditable(False)
 				for crf in range(CRF_MIN,CRF_MAX+1):
-					crf_item = QCRFItem(str(crf))
-					crf_item.setEditable(False)
-					preset_item.appendRow(crf_item)					
-				resolution_item.appendRow(preset_item)
-			resolution_item.update()
-			self.model.appendRow(resolution_item)
+					self.tests.append(Test(resolution,preset,crf))
+
+		self.model = QStandardItemModel()
+		self.testedGroup = QStandardItem('Tested')
+		self.untestedGroup = QStandardItem('Untested')
+		self.model.appendRow(self.untestedGroup)
+		self.model.appendRow(self.testedGroup)
+
+	def UpdateTestTree(self):
+		#nuke whatever exists
+		self.testedGroup.removeRows(0,self.testedGroup.rowCount())
+		self.untestedGroup.removeRows(0,self.untestedGroup.rowCount())
+		#now the repopulation can begin at last....war is awful
+		for test in self.tests:
+			if test.results:
+				self.AddTestToTree(self.testedGroup,test)
+			else:
+				self.AddTestToTree(self.untestedGroup,test)
+		self.TestsTree.expandToDepth(0)
+
+	def AddTestToTree(self,treeRow,test):
+		for rindex in range(0,treeRow.rowCount()):
+			resolutionItem = treeRow.child(rindex)
+			if resolutionItem.resolution == test.resolution:
+				for pindex in range(0,resolutionItem.rowCount()):
+					presetItem = resolutionItem.child(pindex)
+					if presetItem.preset == test.preset:
+						#found existing preset group , just add it
+						presetItem.appendRow(QCRFItem(test))
+						return
+				#no preset ground found for it, create new one
+				newPreset = QPresetItem(test.preset)
+				newPreset.appendRow(QCRFItem(test))
+				resolutionItem.appendRow(newPreset)
+				return
+		#no resolution group found, create resolution group and preset group!
+		newResolution = QResolutionItem(test.resolution)
+		newPreset = QPresetItem(test.preset)
+		newPreset.appendRow(QCRFItem(test))
+		newResolution.appendRow(newPreset)
+		treeRow.appendRow(newResolution)
+		return
+
 	
 
 
