@@ -274,6 +274,10 @@ class QResolutionItem(QStandardItem):
 		self.setText(resolution)
 		self.setEditable(False)
 		self.result = None
+		self.tested = False
+
+	def getHash(self):
+		return str(self.tested) + str(self.resolution)
 
 	def update(self):
 		for presetItemIndex in range(0,self.rowCount()):
@@ -301,6 +305,9 @@ class QPresetItem(QStandardItem):
 		self.setEditable(False)
 		self.setText(preset)
 
+	def getHash(self):
+		return str(self.tested) + self.preset
+
 	def update(self):
 		for crfItemIndex in range(0,self.rowCount()):
 			crfItem = self.child(crfItemIndex)
@@ -324,10 +331,13 @@ class QCRFItem(QStandardItem):
 		self.test_this = True
 		self.tested = False
 		self.result = 'maybe'
+		self.test = test
 		self.CRF = test.crf
 		self.setText(str(test.crf))
 		self.setEditable(False)
 		self.results = None
+	def getHash(self):
+		return str(tested) + str(test)
 
 	def update(self):
 		if self.result is 'maybe':
@@ -389,8 +399,10 @@ class MainWindow(QWidget):
 		self.TestsTree.setModel(self.model)
 		self.TestsTree.resize(200,500)
 		self.TestsTree.move(25,25)	
+		self.TestsTree.setContextMenuPolicy(Qt.CustomContextMenu)
+		self.TestsTree.customContextMenuRequested.connect(self.OpenTreeMenu)
+		self.TestsTree.connect(self.TestsTree.selectionModel(), SIGNAL("selectionChanged(QItemSelection, QItemSelection)"), self.SelectionChanged) 
 		self.UpdateTestTree()
-
 		self.ResultFrame = IndividualTestResultFrame(self)
 		self.ResultFrame.move(250,250)
 		#self.ResultFrame.show(testCRF)
@@ -400,7 +412,36 @@ class MainWindow(QWidget):
 		self.show()
 		#self.BeginTests(reversed(self.tests))
 		#Optimize()
+	def SelectionChanged(self,newSelection,oldSelection):
+		for index in self.TestsTree.selectedIndexes():
+			print self.model.itemFromIndex(index)
 
+	def OpenTreeMenu(self,position):
+		if len(self.TestsTree.selectedIndexes()) == 1:
+			index = self.TestsTree.selectedIndexes()[0]
+			item = self.model.itemFromIndex(index)
+			if type(item) != QStandardItem:
+				if item.tested == False:
+					menu = QMenu()
+					menu.addAction('Test')
+					action = menu.exec_(self.TestsTree.viewport().mapToGlobal(position))
+					if action:
+						testlist = []
+						if type(item) is QResolutionItem:
+							for presetItem in self.getChildren(item):
+								for crfItem in self.getChildren(presetItem):
+									testlist.append(crfItem.test)
+
+						elif type(item) is QPresetItem:
+							for crfItem in self.getChildren(item):
+								testlist.append(crfItem.test)
+
+						elif type(item) is QCRFItem:
+							testlist = [item.test]
+
+						self.BeginTests(testlist)
+
+    
 	def BeginTests(self,tests):
 		if self.test_in_progress:
 			print 'Test already in progress'
@@ -423,6 +464,8 @@ class MainWindow(QWidget):
 		if len(self.test_queue) > 0:
 			print 'More tests in the queue moving to next one'
 			self.StartX264Job(self.test_queue.pop())
+		else:
+			self.test_in_progress = False
 
 
 	def SetUpLog(self):
@@ -459,11 +502,35 @@ class MainWindow(QWidget):
 
 		self.model = QStandardItemModel()
 		self.testedGroup = QStandardItem('Tested')
+		self.testedGroup.setEditable(False)
 		self.untestedGroup = QStandardItem('Untested')
+		self.untestedGroup.setEditable(False)
 		self.model.appendRow(self.untestedGroup)
 		self.model.appendRow(self.testedGroup)
 
+	def getChildren(self,standardItem):
+		children = []
+		for index in range(0,standardItem.rowCount()):
+			children.append(standardItem.child(index))
+		return children
+
 	def UpdateTestTree(self):
+		#this whole method is horrible and i feel bad for allowing it to exist
+		#persist expanded item dumb hashes
+		expandedTestedItems = []
+		for rItem in self.getChildren(self.testedGroup):
+			if self.TestsTree.isExpanded(rItem.index()):
+				expandedTestedItems.append(rItem.getHash())
+			for pItem in self.getChildren(rItem):
+				if self.TestsTree.isExpanded(pItem.index()):
+					expandedTestedItems.append(pItem.getHash())
+		expandedUntestedItems = []
+		for rItem in self.getChildren(self.untestedGroup):
+			if self.TestsTree.isExpanded(rItem.index()):
+				expandedUntestedItems.append(rItem.getHash())
+			for pItem in self.getChildren(rItem):
+				if self.TestsTree.isExpanded(pItem.index()):
+					expandedUntestedItems.append(pItem.getHash())
 		#nuke whatever exists
 		self.testedGroup.removeRows(0,self.testedGroup.rowCount())
 		self.untestedGroup.removeRows(0,self.untestedGroup.rowCount())
@@ -473,29 +540,60 @@ class MainWindow(QWidget):
 				self.AddTestToTree(self.testedGroup,test)
 			else:
 				self.AddTestToTree(self.untestedGroup,test)
-		self.TestsTree.expandToDepth(0)
 
+		for expandedHash in expandedTestedItems:
+			for rItem in self.getChildren(self.testedGroup):
+				if rItem.getHash() == expandedHash:
+					self.TestsTree.setExpanded(rItem.index(),True)
+					break
+				else:
+					for pItem in self.getChildren(rItem):
+						if pItem.getHash() == expandedHash:
+							self.TestsTree.setExpanded(pItem.index(),True)
+							break
+		for expandedHash in expandedUntestedItems:
+			for rItem in self.getChildren(self.untestedGroup):
+				if rItem.getHash() == expandedHash:
+					self.TestsTree.setExpanded(rItem.index(),True)
+					break
+				else:
+					for pItem in self.getChildren(rItem):
+						if pItem.getHash() == expandedHash:
+							self.TestsTree.setExpanded(pItem.index(),True)
+							break
+
+	
 	def AddTestToTree(self,treeRow,test):
-		for rindex in range(0,treeRow.rowCount()):
-			resolutionItem = treeRow.child(rindex)
+		for resolutionItem in self.getChildren(treeRow):
 			if resolutionItem.resolution == test.resolution:
-				for pindex in range(0,resolutionItem.rowCount()):
-					presetItem = resolutionItem.child(pindex)
+				for presetItem in self.getChildren(resolutionItem):
 					if presetItem.preset == test.preset:
 						#found existing preset group , just add it
-						presetItem.appendRow(QCRFItem(test))
+						newCRF = QCRFItem(test)
+						presetItem.appendRow(newCRF)
+						if test.results:
+							newCRF.tested = True
 						return
 				#no preset ground found for it, create new one
 				newPreset = QPresetItem(test.preset)
-				newPreset.appendRow(QCRFItem(test))
+				newCRF = QCRFItem(test)
+				newPreset.appendRow(newCRF)
 				resolutionItem.appendRow(newPreset)
+				if test.results:
+					newPreset.tested = True
+					newCRF.tested = True
 				return
 		#no resolution group found, create resolution group and preset group!
 		newResolution = QResolutionItem(test.resolution)
 		newPreset = QPresetItem(test.preset)
-		newPreset.appendRow(QCRFItem(test))
+		newCRF = QCRFItem(test)
+		newPreset.appendRow(newCRF)
 		newResolution.appendRow(newPreset)
 		treeRow.appendRow(newResolution)
+		if test.results:
+			newResolution.tested = True
+			newPreset.tested = True
+			newCRF.tested = True
 		return
 
 	
