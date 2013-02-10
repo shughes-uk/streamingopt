@@ -17,7 +17,7 @@ CRF_MIN = 30
 VBR_MAX = 400
 VBUFF = VBR_MAX * 2
 INPUT_FILE = 'test.mp4'
-RENDER_FRAMES = 100
+RENDER_FRAMES = 1000
 MAX_CPU = 85
 PRESETS = ['ultrafast','superfast','veryfast','faster','fast','medium','slow','slower','veryslow','placebo']
 RESOLUTIONS = {'720p':(1280,720),'1080p':(1920,1080),'480p':(854,480)}
@@ -326,21 +326,49 @@ class IndividualTestResultFrame(QFrame):
 		self.SSIMLabel.move(550,50)
 		self.SSIMLabel.resize(150,15)
 
+		self.ImageQualityButton = QRadioButton('Image Quality',self)
+		self.ImageQualityButton.move(550,100)
+		self.ImageQualityButton.hide()
+
+		self.CpuUseButton = QRadioButton('Cpu Usage',self)
+		self.CpuUseButton.move(550,200)
+		self.CpuUseButton.hide()
+		self.ImageQualityButton.click()
+		self.ImageQualityButton.toggled.connect(self.IqToggled)
+		self.showIq = True
+		
 		self.rGraph = ResultGraphSingle(self,([1,1],[1,1]))
 
 		self.hide()
 
+	def IqToggled(self,state):
+		self.showIq = state
+		self.update_self(self.tests)
+
 	def show(self,tests):
 		self.rGraph.hide()
+		self.tests = tests
+		self.update_self(tests)
+		super(QFrame,self).show()
+
+	def update_self(self,tests):
 		if type(tests) is list:
 			cpuResults = []
 			for test in tests:
 				label = str(test.resolution) + '_' + str(test.preset) + '_' + str(test.crf)
-				cpuResults.append((test.results.cpuMon.timePolls,test.results.cpuMon.cpuPolls,label))
-			self.rGraph = ResultGraphMany(self,cpuResults)
+				if self.showIq:
+					cpuResults.append((test.results.ssim,test.results.avg_cpu,label))
+				else:
+					cpuResults.append((test.results.cpuMon.timePolls,test.results.cpuMon.cpuPolls,label))
+			if self.showIq:
+				self.rGraph = ResultGraphMany(self,cpuResults,'SSIM (?)')
+			else:
+				self.rGraph = ResultGraphMany(self,cpuResults)
 			self.FPSLabel.hide()
 			self.MaxCpuLabel.hide()
 			self.SSIMLabel.hide()
+			self.CpuUseButton.show()
+			self.ImageQualityButton.show()
 		else:
 			self.rGraph = ResultGraphSingle(self,(tests.results.cpuMon.timePolls,tests.results.cpuMon.cpuPolls))
 			self.FPSLabel.setText('Average FPS : %i' %tests.results.avg_fps)
@@ -349,25 +377,26 @@ class IndividualTestResultFrame(QFrame):
 			self.FPSLabel.show()
 			self.MaxCpuLabel.show()
 			self.SSIMLabel.show()
+			self.CpuUseButton.hide()
+			self.ImageQualityButton.hide()
 
 		self.rGraph.resize(525,275)
 		self.rGraph.show()
 		self.setFrameShape(QFrame.StyledPanel)
-		super(QFrame,self).show()
 
 class ResultGraphMany(FigureCanvas):
-	def __init__(self,parent,lines):
+	def __init__(self,parent,lines,xlabel='Time (seconds)'):
 		self.fig = Figure()
 		self.fig.subplots_adjust(left=0.10, right=0.7, top=0.96, bottom=0.12)
 		self.axes = self.fig.add_subplot(111)
 		for line in lines:
-			self.axes.plot(line[0],line[1],label=line[2])
+			self.axes.plot(line[0],line[1],label=line[2],marker='o')
 		fontP = FontProperties()
    		fontP.set_size('small')
 		self.axes.legend(bbox_to_anchor=(1.5, 1.0),prop = fontP)
 		self.axes.set_ylim(0,100)
 		self.axes.set_ylabel('CPU (%)')
-		self.axes.set_xlabel('Time (seconds)')
+		self.axes.set_xlabel(xlabel)
 		FigureCanvas.__init__(self,self.fig)
 		self.setParent(parent)
 
@@ -396,9 +425,9 @@ class MainWindow(QWidget):
 		
 		self.SetUpLog()
 
-		self.GoButton = QPushButton('Go',self)
-		self.GoButton.resize(self.GoButton.sizeHint())
-		self.GoButton.move(600,600)
+		#self.GoButton = QPushButton('Go',self)
+		#self.GoButton.resize(self.GoButton.sizeHint())
+		#self.GoButton.move(600,600)
 		#self.connect(self.GoButton, SIGNAL("clicked()"), self.StartJerb)
 
 		self.CancelButton = QPushButton('Cancel',self)
@@ -513,7 +542,7 @@ class MainWindow(QWidget):
 		self.OutTextEdit.resize(725,200)
 		self.OutTextEdit.move(250,25)
 		print 'Console Logging initialized'
-		print >> sys.stderr, 'spam'
+		#print >> sys.stderr, 'spam'
 	
 	def LogToWindow(self,msgclr):
 		if msgclr[1]:
