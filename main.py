@@ -1,11 +1,13 @@
 import time
 import subprocess
 import psutil
-import os
 import re
-import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_qt4agg import FigureCanvasQTAgg as FigureCanvas
 from PyQt4.QtGui import *
 from PyQt4.QtCore import *
+from matplotlib.font_manager import FontProperties
+
 import sys 
 from datetime import datetime
 import threading
@@ -53,17 +55,20 @@ MLP_LINES = ['-','--','-.',':','.',',','o','v','^','<']
 				CRF 35 --> CRF 21
 
 """
+
 class CPUMon(threading.Thread):
 	def __init__(self,pollInterval):
 		threading.Thread.__init__(self)
 		self.exiting = False
 		self.pollInterval = pollInterval
 		self.cpuPolls = []
+		self.timePolls = []
 
 	def run(self):
 		self.start_time = time.time()
 		while not self.exiting:
 			self.cpuPolls.append(psutil.cpu_percent())
+			self.timePolls.append(time.time()  - self.start_time)
 			time.sleep(self.pollInterval)
 		self.end_time = time.time()
 
@@ -179,57 +184,11 @@ class X264Thread(QThread):
 			print '\t Average FPS : %f' %avg_fps
 			print '\t SSIM : %f' %ssim
 
-			self.test.results = TestResult(avg_fps,cpuMonitor.getAvg(),cpuMonitor.cpuPolls,ssim)
+			self.test.results = TestResult(avg_fps,cpuMonitor.getAvg(),cpuMonitor,ssim)
 			self.jobFinishedSignal.emit(self.test)
 		except Exception , e:
 			print e.message
-
-def Optimize():
-	#preset = PRESETS[0]
-	resolution = RESOLUTIONS['480p']
-	#max out CRF for each preset
-	results = []
-	results_resolution = []
-	results_presets = []
-	for resolution in RESOLUTIONS.values():
-		results_resolution = []
-		for preset in PRESETS:
-			results_presets = []
-			for test_crf in reversed(range(CRF_MIN , CRF_MAX + 1)):
-				result = { 'preset' : preset , 'resolution' : resolution , 'crf' : test_crf }
-				result['testresults'] = DoTest(vbv_bufsize=VBR_MAX*2,vbv_maxrate=VBR_MAX,crf=test_crf,resolution=resolution,preset=preset)
-				if result['testresults']['avg_fps'] < 30:
-					break
-				results_presets.append( result )
-			if len(results_presets) > 0:
-				results_resolution.append(results_presets)
-		if len(results_resolution) > 0:
-			results.append(results_resolution)
-			
-
-	colors = list(MLP_COLORS)
-	lines = list(MLP_LINES)
-	#print results
-	for resolution_results in results:
-		for preset_results in resolution_results:
-			to_plot_x = []
-			to_plot_y = []
-			for crf_result in preset_results:				
-				to_plot_x.append(crf_result['testresults']['avg_cpu'])
-				to_plot_y.append(crf_result['testresults']['ssim'])
-			plt.plot(to_plot_x,to_plot_y)
-			#plt.show()
-
-	plt.ylabel('ssim')
-	plt.xlabel('avg_cpu')
-	plt.show()
-
 	
-
-		
-	#average_cpu , max_cpu , avg_fps , ssim = DoTest()
-
-#Optimize()
 
 class QtTextLogger(QObject):
 
@@ -249,10 +208,10 @@ class QtTextLogger(QObject):
 			self.out.write('%i:%i:%i : ' %(t.hour,t.minute,t.second) + message + '\n')
 
 class TestResult():
-	def __init__(self,avg_fps,avg_cpu,cpu_polls,ssim):
+	def __init__(self,avg_fps,avg_cpu,cpuMon,ssim):
 		self.avg_fps = avg_fps
 		self.avg_cpu = avg_cpu
-		self.cpu_polls = cpu_polls
+		self.cpuMon = cpuMon
 		self.ssim = ssim
 
 
@@ -353,24 +312,78 @@ class QCRFItem(QStandardItem):
 class IndividualTestResultFrame(QFrame):
 	def __init__(self,parent):
 		super(QFrame,self).__init__(parent)
-		self.resize(525,275)
+		self.resize(725,275)
+
 		self.FPSLabel = QLabel(self)
-		self.FPSLabel.move(10,10)
+		self.FPSLabel.move(550,10)
 		self.FPSLabel.resize(150,15)
+
 		self.MaxCpuLabel = QLabel(self)
-		self.MaxCpuLabel.move(160,10)
+		self.MaxCpuLabel.move(550,30)
 		self.MaxCpuLabel.resize(150,15)
+
 		self.SSIMLabel = QLabel(self)
-		self.SSIMLabel.move(310,10)
+		self.SSIMLabel.move(550,50)
 		self.SSIMLabel.resize(150,15)
+
+		self.rGraph = ResultGraphSingle(self,([1,1],[1,1]))
+
 		self.hide()
 
-	def show(self,qcrfitem):
-		self.FPSLabel.setText('Average FPS : %i' %qcrfitem.results['avg_fps'])
-		self.MaxCpuLabel.setText('Max CPU : %i' %qcrfitem.results['max_cpu'])
-		self.SSIMLabel.setText('SSIM : %i' %qcrfitem.results['SSIM'])
+	def show(self,tests):
+		self.rGraph.hide()
+		if type(tests) is list:
+			cpuResults = []
+			for test in tests:
+				label = str(test.resolution) + '_' + str(test.preset) + '_' + str(test.crf)
+				cpuResults.append((test.results.cpuMon.timePolls,test.results.cpuMon.cpuPolls,label))
+			self.rGraph = ResultGraphMany(self,cpuResults)
+			self.FPSLabel.hide()
+			self.MaxCpuLabel.hide()
+			self.SSIMLabel.hide()
+		else:
+			self.rGraph = ResultGraphSingle(self,(tests.results.cpuMon.timePolls,tests.results.cpuMon.cpuPolls))
+			self.FPSLabel.setText('Average FPS : %i' %tests.results.avg_fps)
+			self.MaxCpuLabel.setText('Avg CPU : %i' %tests.results.avg_cpu)
+			self.SSIMLabel.setText('SSIM : %f' %tests.results.ssim)
+			self.FPSLabel.show()
+			self.MaxCpuLabel.show()
+			self.SSIMLabel.show()
+
+		self.rGraph.resize(525,275)
+		self.rGraph.show()
 		self.setFrameShape(QFrame.StyledPanel)
 		super(QFrame,self).show()
+
+class ResultGraphMany(FigureCanvas):
+	def __init__(self,parent,lines):
+		self.fig = Figure()
+		self.fig.subplots_adjust(left=0.10, right=0.7, top=0.96, bottom=0.12)
+		self.axes = self.fig.add_subplot(111)
+		for line in lines:
+			self.axes.plot(line[0],line[1],label=line[2])
+		fontP = FontProperties()
+   		fontP.set_size('small')
+		self.axes.legend(bbox_to_anchor=(1.5, 1.0),prop = fontP)
+		self.axes.set_ylim(0,100)
+		self.axes.set_ylabel('CPU (%)')
+		self.axes.set_xlabel('Time (seconds)')
+		FigureCanvas.__init__(self,self.fig)
+		self.setParent(parent)
+
+class ResultGraphSingle(FigureCanvas):
+	def __init__(self,parent,line):
+		self.fig = Figure()
+		self.fig.subplots_adjust(left=0.10, right=0.96, top=0.96, bottom=0.12)
+		self.axes = self.fig.add_subplot(111)
+		self.axes.plot(line[0],line[1])
+		self.axes.set_ylim(0,100)
+		self.axes.set_ylabel('CPU (%)')
+		self.axes.set_xlabel('Time (seconds)')
+		FigureCanvas.__init__(self,self.fig)
+		self.setParent(parent)
+
+
 
 class MainWindow(QWidget):
 	def __init__(self):
@@ -378,7 +391,7 @@ class MainWindow(QWidget):
 		self.initUI()
 
 	def initUI(self):
-		self.setGeometry(50,50,800,640)
+		self.setGeometry(50,50,1000,640)
 		self.setWindowTitle('X264 Streaming Optimizer')
 		
 		self.SetUpLog()
@@ -405,6 +418,7 @@ class MainWindow(QWidget):
 		self.UpdateTestTree()
 		self.ResultFrame = IndividualTestResultFrame(self)
 		self.ResultFrame.move(250,250)
+
 		#self.ResultFrame.show(testCRF)
 
 		self.test_in_progress = False
@@ -412,9 +426,31 @@ class MainWindow(QWidget):
 		self.show()
 		#self.BeginTests(reversed(self.tests))
 		#Optimize()
+
 	def SelectionChanged(self,newSelection,oldSelection):
-		for index in self.TestsTree.selectedIndexes():
-			print self.model.itemFromIndex(index)
+		if len(self.TestsTree.selectedIndexes()) > 0:
+			selectedIndex = self.TestsTree.selectedIndexes()[0]
+			selected = self.model.itemFromIndex(selectedIndex)
+			if type(selected) is QCRFItem:
+				if selected.test.results:
+					self.ResultFrame.show(selected.test)
+			elif type(selected) is QPresetItem:
+				tests = []
+				for qCrfItem in self.getChildren(selected):
+					if qCrfItem.test.results:
+						tests.append(qCrfItem.test)
+				if len(tests) > 0:
+					self.ResultFrame.show(tests)
+			elif type(selected) is QResolutionItem:
+				tests = []
+				for qPresetItem in self.getChildren(selected):
+					for qCrfItem in self.getChildren(qPresetItem):
+						if qCrfItem.test.results:
+							tests.append(qCrfItem.test)
+				if len(tests) > 0:
+					self.ResultFrame.show(tests)
+
+
 
 	def OpenTreeMenu(self,position):
 		if len(self.TestsTree.selectedIndexes()) == 1:
@@ -474,7 +510,7 @@ class MainWindow(QWidget):
 		sys.stderr = QtTextLogger(sys.stderr,QColor(255,0,0))
 		sys.stdout.messageSignal.connect(self.LogToWindow)
 		sys.stderr.messageSignal.connect(self.LogToWindow)
-		self.OutTextEdit.resize(525,200)
+		self.OutTextEdit.resize(725,200)
 		self.OutTextEdit.move(250,25)
 		print 'Console Logging initialized'
 		print >> sys.stderr, 'spam'
