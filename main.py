@@ -13,12 +13,11 @@ from datetime import datetime
 import threading
 #xsplit uses between 25-35 CRF
 CRF_MAX = 35
-CRF_MIN = 30
-VBR_MAX = 400
+CRF_MIN = 25
+VBR_MAX = 4000
 VBUFF = VBR_MAX * 2
 INPUT_FILE = 'test.mp4'
 RENDER_FRAMES = 1000
-MAX_CPU = 85
 PRESETS = ['ultrafast','superfast','veryfast','faster','fast','medium','slow','slower','veryslow','placebo']
 RESOLUTIONS = {'720p':(1280,720),'1080p':(1920,1080),'480p':(854,480)}
 FPS = [30,60]
@@ -412,30 +411,91 @@ class ResultGraphSingle(FigureCanvas):
 		FigureCanvas.__init__(self,self.fig)
 		self.setParent(parent)
 
-
-
 class MainWindow(QWidget):
 	def __init__(self):
 		super(MainWindow,self).__init__()
+		self.setGeometry(50,50,1000,640)
+		self.setWindowTitle('X264 Streaming Optimizer')
+		self.configWindow = ConfigWindow(self)
+		self.configWindow.show()
+		self.testWindow = TestWindow(self)
+		self.testWindow.hide()
+		self.show()
+		self.configWindow.finishedSignal.connect(self.configDone)
+
+	def configDone(self):
+		self.configWindow.hide()
+		self.testWindow.show()
+
+
+class ConfigWindow(QWidget):
+	finishedSignal = pyqtSignal(object)
+
+	def __init__(self,parent):
+		super(ConfigWindow,self).__init__(parent)
+		self.bitrateEdit = QLineEdit(self)
+		self.bitrateEdit.resize(150,20)
+		self.bitrateEdit.move(430, 175)
+		self.bitrateEdit.setValidator(QIntValidator(100, 15000))
+		self.bitrateEdit.insert(str(VBR_MAX))
+		self.bitrateEdit.textChanged[str].connect(self.SetBitrate)
+
+		self.browseFile = QPushButton('Browse',self)
+		self.browseFile.resize(self.browseFile.sizeHint())
+		self.browseFile.move(585,200)
+		self.browseFile.clicked.connect(self.BrowseFile)
+
+		self.browseDisplay = QLineEdit(self)
+		self.browseDisplay.resize(150,20)
+		self.browseDisplay.move(430, 200)
+		self.browseDisplay.insert(INPUT_FILE)
+		self.browseDisplay.setReadOnly(True)
+
+		self.bitrateLabel = QLabel('Bitrate :',self)
+		self.bitrateLabel.move(380,175)
+		self.bitrateLabel.resize(50,20)
+
+		self.fileLabel = QLabel('Test Video :',self)
+		self.fileLabel.move(364,200)
+		self.fileLabel.resize(70,20)
+
+		self.doneButton = QPushButton('Done',self)
+		self.doneButton.resize(self.browseFile.sizeHint())
+		self.doneButton.move(430,240)
+		self.doneButton.clicked.connect(self.Done)
+		
+		self.show()
+
+	def Done(self,*args):
+		self.finishedSignal.emit(True)
+
+	def BrowseFile(self,*args):
+		global INPUT_FILE
+		INPUT_FILE = QFileDialog.getOpenFileName(self, 'Open file', '.')
+		self.browseDisplay.clear()
+		self.browseDisplay.insert(INPUT_FILE)
+		self.browseDisplay.setCursorPosition(0)
+
+	def SetBitrate(self,text):
+		global VBR_MAX
+		global VBUFF
+		VBR_MAX = int(text)
+		VBUFF = VBR_MAX * 2
+		
+class TestWindow(QWidget):
+	def __init__(self,parent):
+		super(TestWindow,self).__init__(parent)
 		self.initUI()
 
 	def initUI(self):
-		self.setGeometry(50,50,1000,640)
-		self.setWindowTitle('X264 Streaming Optimizer')
 		
 		self.SetUpLog()
-
-		#self.GoButton = QPushButton('Go',self)
-		#self.GoButton.resize(self.GoButton.sizeHint())
-		#self.GoButton.move(600,600)
-		#self.connect(self.GoButton, SIGNAL("clicked()"), self.StartJerb)
 
 		self.CancelButton = QPushButton('Cancel',self)
 		self.CancelButton.resize(self.CancelButton.sizeHint())
 		self.CancelButton.move(500,500)
 		self.connect(self.CancelButton,SIGNAL("clicked()"), self.StopJerb)
 		self.CancelButton.hide()
-
 		self.TestsTree = QTreeView(self)
 		self.BuildTestsModel()
 		self.TestsTree.setModel(self.model)
@@ -447,14 +507,8 @@ class MainWindow(QWidget):
 		self.UpdateTestTree()
 		self.ResultFrame = IndividualTestResultFrame(self)
 		self.ResultFrame.move(250,250)
-
-		#self.ResultFrame.show(testCRF)
-
 		self.test_in_progress = False
 		self.test_queue = []
-		self.show()
-		#self.BeginTests(reversed(self.tests))
-		#Optimize()
 
 	def SelectionChanged(self,newSelection,oldSelection):
 		if len(self.TestsTree.selectedIndexes()) > 0:
@@ -665,7 +719,6 @@ class MainWindow(QWidget):
 
 
 app = QApplication(sys.argv)
-
 w = MainWindow()
 
 sys.exit(app.exec_())
