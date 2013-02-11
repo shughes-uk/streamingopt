@@ -161,7 +161,7 @@ class X264Thread(QThread):
 								'--vbv-bufsize' , str(self.vbv_bufsize) ,
 								'--ssim',
 								'--video-filter' , "resize:%i,%i" %(self.resolution[0],self.resolution[1]) ,
-								'test.mp4'
+								self.input_file
 								],
 								stderr=subprocess.STDOUT,
 								stdout=subprocess.PIPE,
@@ -471,7 +471,8 @@ class ConfigWindow(QWidget):
 
 	def BrowseFile(self,*args):
 		global INPUT_FILE
-		INPUT_FILE = QFileDialog.getOpenFileName(self, 'Open file', '.')
+		INPUT_FILE = str(QFileDialog.getOpenFileName(self, 'Open file', '.'))
+		print INPUT_FILE
 		self.browseDisplay.clear()
 		self.browseDisplay.insert(INPUT_FILE)
 		self.browseDisplay.setCursorPosition(0)
